@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds ClaudeMeter.app into build/. With --install, copies it to ~/Applications
+# Builds ClaudeMeter.app into build/. With --install, copies it to /Applications
 # and (re)starts it.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -16,9 +16,8 @@ echo "Built $APP"
 
 if [ "${1:-}" = "--install" ]; then
     pkill -x ClaudeMeter || true
-    mkdir -p "$HOME/Applications"
-    rm -rf "$HOME/Applications/ClaudeMeter.app"
-    cp -R "$APP" "$HOME/Applications/"
-    open "$HOME/Applications/ClaudeMeter.app"
-    echo "Installed and started ~/Applications/ClaudeMeter.app"
+    rm -rf "/Applications/ClaudeMeter.app"
+    cp -R "$APP" "/Applications/"
+    open "/Applications/ClaudeMeter.app"
+    echo "Installed and started /Applications/ClaudeMeter.app"
 fi
