@@ -1,0 +1,24 @@
+#!/bin/bash
+# Builds ClaudeMeter.app into build/. With --install, copies it to ~/Applications
+# and (re)starts it.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+swift build -c release
+
+APP=build/ClaudeMeter.app
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS"
+cp .build/release/ClaudeMeter "$APP/Contents/MacOS/ClaudeMeter"
+cp Resources/Info.plist "$APP/Contents/Info.plist"
+codesign --force --sign - "$APP"
+echo "Built $APP"
+
+if [ "${1:-}" = "--install" ]; then
+    pkill -x ClaudeMeter || true
+    mkdir -p "$HOME/Applications"
+    rm -rf "$HOME/Applications/ClaudeMeter.app"
+    cp -R "$APP" "$HOME/Applications/"
+    open "$HOME/Applications/ClaudeMeter.app"
+    echo "Installed and started ~/Applications/ClaudeMeter.app"
+fi
