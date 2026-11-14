@@ -33,18 +33,37 @@ struct ParsingTests {
         }
     }
 
-    @Test func expiredTokenIsReported() {
-        let past = (now.timeIntervalSince1970 - 60) * 1000
-        let creds = #"{"claudeAiOauth":{"accessToken":"abc","expiresAt":\#(Int(past))}}"#
-        #expect(throws: UsageProblem.expired) {
-            try UsageService.token(fromCredentials: Data(creds.utf8), now: now)
-        }
+    @Test func readsTokenAndExpiry() throws {
+        let expiresMs = (now.timeIntervalSince1970 + 3600) * 1000
+        let creds = #"{"claudeAiOauth":{"accessToken":"abc","expiresAt":\#(Int(expiresMs))}}"#
+        let parsed = try UsageService.credentials(from: Data(creds.utf8))
+        #expect(parsed.token == "abc")
+        #expect(parsed.expiresAt == now.addingTimeInterval(3600))
     }
 
-    @Test func validTokenIsReturned() throws {
-        let future = (now.timeIntervalSince1970 + 3600) * 1000
-        let creds = #"{"claudeAiOauth":{"accessToken":"abc","expiresAt":\#(Int(future))}}"#
-        #expect(try UsageService.token(fromCredentials: Data(creds.utf8), now: now) == "abc")
+    @Test func missingTokenMeansSignedOut() {
+        #expect(throws: UsageProblem.notSignedIn) {
+            try UsageService.credentials(from: Data(#"{"claudeAiOauth":{}}"#.utf8))
+        }
+    }
+}
+
+struct RenewalTests {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+
+    @Test func renewsShortlyBeforeExpiry() {
+        #expect(!Renewal.isDue(expiresAt: now.addingTimeInterval(3600), now: now))
+        #expect(!Renewal.isDue(expiresAt: now.addingTimeInterval(Renewal.margin + 1), now: now))
+        #expect(Renewal.isDue(expiresAt: now.addingTimeInterval(Renewal.margin), now: now))
+        #expect(Renewal.isDue(expiresAt: now.addingTimeInterval(-60), now: now))
+        #expect(!Renewal.isDue(expiresAt: nil, now: now))
+    }
+
+    @Test func paidRenewalIsRateLimited() {
+        let start = Date().addingTimeInterval(10 * 365 * 86400)  // far from any real call
+        #expect(ClaudeCLI.renewalSteps(now: start) == [ClaudeCLI.statusStep, ClaudeCLI.requestStep])
+        #expect(ClaudeCLI.renewalSteps(now: start.addingTimeInterval(60)) == [ClaudeCLI.statusStep])
+        #expect(ClaudeCLI.renewalSteps(now: start.addingTimeInterval(ClaudeCLI.requestCooldown)) == [ClaudeCLI.statusStep, ClaudeCLI.requestStep])
     }
 }
 

@@ -3,15 +3,28 @@ import Foundation
 /// Reads the Claude Code sign-in from the login Keychain and asks Anthropic's usage
 /// endpoint (the one behind Claude Code's /usage screen) for the plan limits.
 ///
-/// The token is only read, never refreshed: refreshing would rotate it out from under
-/// Claude Code. When it expires, running `claude` once refreshes it.
+/// ClaudeMeter never renews the token itself: each renewal rotates the refresh key,
+/// so two programs renewing independently would sign each other out. When the token
+/// is about to expire, it asks Claude Code to renew it (see `ClaudeCLI`).
 public enum UsageService {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     static let keychainService = "Claude Code-credentials"
 
     public static func fetch(now: Date = Date()) async throws -> Usage {
-        let token = try readToken(now: now)
+        var credentials = try readCredentials()
+        if Renewal.isDue(expiresAt: credentials.expiresAt, now: now) {
+            credentials = try await renewed(replacing: credentials)
+        }
+        do {
+            return try await request(token: credentials.token, now: now)
+        } catch UsageProblem.expired {
+            // The server rejected a token the clock says is still good: renew once and retry.
+            let fresh = try await renewed(replacing: credentials)
+            return try await request(token: fresh.token, now: now)
+        }
+    }
 
+    static func request(token: String, now: Date) async throws -> Usage {
         var request = URLRequest(url: endpoint)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -53,25 +66,42 @@ public enum UsageService {
 
     // MARK: - Sign-in
 
-    static func readToken(now: Date) throws -> String {
+    struct Credentials: Equatable {
+        let token: String
+        let expiresAt: Date?
+    }
+
+    static func readCredentials() throws -> Credentials {
         guard let raw = keychainCredentials() ?? fileCredentials() else {
             throw UsageProblem.notSignedIn
         }
-        return try token(fromCredentials: raw, now: now)
+        return try credentials(from: raw)
     }
 
-    static func token(fromCredentials raw: Data, now: Date) throws -> String {
+    static func credentials(from raw: Data) throws -> Credentials {
         guard
             let root = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
             let oauth = root["claudeAiOauth"] as? [String: Any],
             let token = oauth["accessToken"] as? String, !token.isEmpty
         else { throw UsageProblem.notSignedIn }
 
-        if let expiresMs = number(oauth["expiresAt"]),
-           Date(timeIntervalSince1970: expiresMs / 1000) <= now {
-            throw UsageProblem.expired
+        let expiresAt = number(oauth["expiresAt"]).map { Date(timeIntervalSince1970: $0 / 1000) }
+        return Credentials(token: token, expiresAt: expiresAt)
+    }
+
+    /// Has Claude Code renew the sign-in, trying the free command first, and returns
+    /// the new credentials. Throws `.expired` if nothing produced a fresh token.
+    static func renewed(replacing old: Credentials) async throws -> Credentials {
+        guard let claude = ClaudeCLI.locate() else { throw UsageProblem.expired }
+
+        for step in ClaudeCLI.renewalSteps(now: Date()) {
+            _ = await ClaudeCLI.run(claude, step)
+            let current = try readCredentials()
+            if current.token != old.token, !Renewal.isDue(expiresAt: current.expiresAt, now: Date()) {
+                return current
+            }
         }
-        return token
+        throw UsageProblem.expired
     }
 
     /// Uses /usr/bin/security, which Claude Code itself uses to store the item, so
@@ -111,5 +141,15 @@ public enum UsageService {
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = fractional.date(from: s) { return d }
         return ISO8601DateFormatter().date(from: s)
+    }
+}
+
+public enum Renewal {
+    /// Renew this long before the token expires, so a refresh never lands on a dead token.
+    public static let margin: TimeInterval = 5 * 60
+
+    public static func isDue(expiresAt: Date?, now: Date) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt.timeIntervalSince(now) <= margin
     }
 }

@@ -36,7 +36,7 @@ public enum UsageProblem: Error, Equatable {
         case .notSignedIn:
             return "Claude Code isn't signed in. Run claude in Terminal and use /login."
         case .expired:
-            return "Your Claude Code sign-in expired. Run claude once in Terminal to refresh it."
+            return "Couldn't renew the Claude Code sign-in automatically. Run claude once in Terminal."
         case .http(let code):
             return "The usage service returned an error (\(code))."
         case .badResponse:
